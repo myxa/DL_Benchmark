@@ -35,7 +35,9 @@ def eval_epoch(loader, model, criterion):
     return np.mean(losses), np.mean(acc)
 
 
-def train(model, epochs, train_loader, val_loader, criterion, optimizer, scheduler=None, save_best=False, path_to_save=None):
+def train(model, epochs, train_loader, val_loader, 
+          criterion, optimizer, scheduler=None, 
+          save_best=False, path_to_save=None, verbose=True):
 
     history = []
     best_val_loss = 1000
@@ -51,17 +53,17 @@ def train(model, epochs, train_loader, val_loader, criterion, optimizer, schedul
                 best_val_loss = val_loss
                 torch.save(model.state_dict(), path_to_save)
 
-
-        print(f'Epoch: {epoch:03d}, Train Loss: {train_loss:.4f}, Test Loss {val_loss:.4f}, '
-              f'Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}')
-        print()
+        if verbose:
+            print(f'Epoch: {epoch:03d}, Train Loss: {train_loss:.4f}, Test Loss {val_loss:.4f}, '
+                f'Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}')
+            print()
 
         history.append((train_loss, val_loss, train_acc, test_acc))
 
     if save_best:
         model.load_state_dict(torch.load(path_to_save, map_location=device()))
 
-    return history
+    return np.array(history)
 
 def device():
     return torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')

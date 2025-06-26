@@ -6,17 +6,6 @@ import torch
 from sklearn.model_selection import train_test_split
 from nilearn.connectome import sym_matrix_to_vec
 from scipy.stats import zscore
-
-import os
-import pandas as pd
-import numpy as np
-from scipy.stats import zscore
-from sklearn.model_selection import train_test_split
-import pickle
-from typing import Tuple, List, Optional, Callable
-from nilearn.connectome import ConnectivityMeasure
-import numpy as np
-    
     
     
 class AnyDataset(Dataset):
@@ -32,8 +21,26 @@ class AnyDataset(Dataset):
     
 
 def get_split_ts(strategy, atlas, GSR):
-    ihb_closed, ihb_opened, _ = load_ihb(strategy, atlas, GSR)
-    china_closed, china_opened, china_y = load_china(strategy, atlas, GSR)
+    """
+    Loads IHB and BeijingEOEC time series data, splits it into training and testing sets,
+    and returns vectorized connectivity matrices and labels.
+
+    Parameters:
+    - strategy (str): Strategy used for preprocessing the data.
+    - atlas (str): Name of the brain atlas used.
+    - GSR (str): 'GSR', 'noGSR' Whether global signal regression was applied.
+
+    Returns:
+    - x_train (np.ndarray): Vectorized training time series.
+    - y_train (np.ndarray): Training labels.
+    - x_test (np.ndarray): Vectorized testing time series.
+    - y_test (np.ndarray): Testing labels.
+    """
+
+    GSR = True if GSR == 'GSR' else False
+    ihb_closed, ihb_opened, _ = _load_ihb(strategy, atlas, GSR)
+    rmet_closed, rmet_opened, _ = _load_rmet(strategy, atlas, GSR)
+    china_closed, china_opened, china_y = _load_china(strategy, atlas, GSR)
 
     train_idx, test_idx = train_test_split(
         np.arange(len(ihb_closed)), train_size=0.1, random_state=42)
@@ -50,11 +57,10 @@ def get_split_ts(strategy, atlas, GSR):
     
     return x_train, y_train, x_test, y_test
 
-x_train, y_train, x_test, y_test = get_split_ts(4, 'AAL', True)
-
 
 def get_split_fc(fc, atlas, strategy, gsr,
-              random_state: int = 42):
+                 vectorize: bool = True,
+                 random_state: int = 42):
     
     """
     Loads functional connectivity data, splits it into training and testing sets,
@@ -64,7 +70,8 @@ def get_split_fc(fc, atlas, strategy, gsr,
     - fc (str): Type of functional connectivity ('glasso', 'partial_corr', 'tangent', etc.).
     - atlas (str): Name of the brain atlas used.
     - strategy (str): Strategy used for preprocessing the data.
-    - gsr (bool): Whether global signal regression was applied.
+    - gsr (str): 'GSR', 'noGSR' Whether global signal regression was applied.
+    - vectorize (bool, optional): Whether to vectorize the connectivity matrices. Default is True.
     - random_state (int, optional): Seed for random operations. Default is 42.
 
     Returns:
@@ -101,32 +108,32 @@ def get_split_fc(fc, atlas, strategy, gsr,
     x_train = np.concatenate([
         cl_test, ihb_cl[train_groups],
         ihb_op[train_groups], op_test2, op_test3])
-    x_train = sym_matrix_to_vec(x_train, discard_diagonal=True)
     
-
     x_test = np.concatenate([
         ihb_cl[test_groups],
         ihb_op[test_groups]])
-    x_test = sym_matrix_to_vec(x_test, discard_diagonal=True)
         
     y_train = np.array(
         [0] * len(cl_test) + [0] * len(train_groups) + [1] * len(train_groups) + [0] * len(op_test2) + [1] * len(op_test3))
     
     y_test = np.array([0] * len(test_groups) + [1] * len(test_groups))
 
+    if vectorize:
+        x_train = sym_matrix_to_vec(x_train, discard_diagonal=True)
+        x_test = sym_matrix_to_vec(x_test, discard_diagonal=True)
     
     return x_train, y_train, x_test, y_test
 
 
 
+def _load_rmet(strategy, atlas, GSR):
 
-
-def load_rmet(strategy, atlas, GSR):
+    coverage = np.load(f'/home/tm/projects/OpenCloseProject/coverage/ihb_{atlas}_parcel_coverage.npy') > 0.1
 
     sub = [f'{i+1:03d}' for i in range(64) if i!= 52]
-    closed = fetch_ts('/data/Projects/OpenCloseChina/ts', sub=sub, GSR=GSR,
+    closed = _fetch_ts('/data/Projects/OpenClose_RMET/ts', sub=sub, GSR=GSR,
                       run=1, task='rest', strategy=strategy, atlas_name=atlas)
-    opened = fetch_ts('/data/Projects/OpenCloseChina/ts', sub=sub, GSR=GSR,
+    opened = _fetch_ts('/data/Projects/OpenClose_RMET/ts', sub=sub, GSR=GSR,
                       run=2, task='rest', strategy=strategy, atlas_name=atlas)
     
     if atlas == 'HCPex':
@@ -144,6 +151,14 @@ def load_rmet(strategy, atlas, GSR):
         for i in opened:
             i.columns = hcp.index
             i.drop(drop, axis=1, inplace=True)
+
+        coverage = np.delete(coverage, to_del+drop)
+
+    closed = np.array(closed)[:, :, coverage]
+    opened = np.array(opened)[:, :, coverage]
+
+    # если hcp то нужно еще регионы удалить 
+    # не помню что за регионы
     
     closed = zscore(closed, axis=1, nan_policy='omit')
     opened = zscore(opened, axis=1, nan_policy='omit')
@@ -158,16 +173,16 @@ def load_rmet(strategy, atlas, GSR):
     groups = np.array([i for i in range(n_closed)] + 
                       [i for i in range(n_opened)])
     
-    return closed, opened, y, groups
+    return closed, opened, y#, groups
 
-def load_ihb(strategy, atlas, GSR):
+def _load_ihb(strategy, atlas, GSR):
 
     coverage = np.load(f'/home/tm/projects/OpenCloseProject/coverage/ihb_{atlas}_parcel_coverage.npy') > 0.1
 
     sub = [f'{i+1:03d}' for i in range(84)]
-    closed = fetch_ts('/data/Projects/OpenCloseIHB/outputs', sub=sub, GSR=GSR,
+    closed = _fetch_ts('/data/Projects/OpenCloseIHB/outputs', sub=sub, GSR=GSR,
                       run=1, task='rest', strategy=strategy, atlas_name=atlas)
-    opened = fetch_ts('/data/Projects/OpenCloseIHB/outputs', sub=sub, GSR=GSR,
+    opened = _fetch_ts('/data/Projects/OpenCloseIHB/outputs', sub=sub, GSR=GSR,
                       run=2, task='rest', strategy=strategy, atlas_name=atlas)
     hcp = None
     if atlas == 'HCPex':
@@ -211,7 +226,7 @@ def load_ihb(strategy, atlas, GSR):
     return closed, opened, y
 
 
-def load_china(strategy, atlas, GSR):
+def _load_china(strategy, atlas, GSR):
 
     coverage = np.load(f'/home/tm/projects/OpenCloseProject/coverage/ihb_{atlas}_parcel_coverage.npy') > 0.1
 
@@ -224,23 +239,23 @@ def load_china(strategy, atlas, GSR):
     closed_ids2 = df['SubjectID'].loc[df['Session_2'] == 'closed'].values
     closed_ids3 = df['SubjectID'].loc[df['Session_3'] == 'closed'].values
 
-    closed1 = fetch_ts('/data/Projects/OpenCloseChina/outputs_china',
+    closed1 = _fetch_ts('/data/Projects/OpenCloseChina/outputs_china',
                   sub=closed_ids1, run=1, GSR=GSR,
                   atlas_name=atlas, strategy=strategy)
 
-    closed2 = fetch_ts('/data/Projects/OpenCloseChina/outputs_china',
+    closed2 = _fetch_ts('/data/Projects/OpenCloseChina/outputs_china',
                         sub=closed_ids2, run=2, GSR=GSR,
                         atlas_name=atlas, strategy=strategy)
 
-    closed3 = fetch_ts('/data/Projects/OpenCloseChina/outputs_china',
+    closed3 = _fetch_ts('/data/Projects/OpenCloseChina/outputs_china',
                         sub=closed_ids3, run=3, GSR=GSR,
                         atlas_name=atlas, strategy=strategy)
 
-    opened2 = fetch_ts('/data/Projects/OpenCloseChina/outputs_china',
+    opened2 = _fetch_ts('/data/Projects/OpenCloseChina/outputs_china',
                         sub=open_ids2, run=2, GSR=GSR,
                         atlas_name=atlas, strategy=strategy)
     
-    opened3 = fetch_ts('/data/Projects/OpenCloseChina/outputs_china',
+    opened3 = _fetch_ts('/data/Projects/OpenCloseChina/outputs_china',
                         sub=open_ids3, run=3, GSR=GSR,
                         atlas_name=atlas, strategy=strategy)
     
@@ -312,7 +327,7 @@ def load_china(strategy, atlas, GSR):
     return closed, opened, y#, groups
 
 
-def fetch_ts(path, sub=None, run=1, task='rest', strategy=4, atlas_name='AAL', GSR=False):
+def _fetch_ts(path, sub=None, run=1, task='rest', strategy=4, atlas_name='AAL', GSR=False):
     ts = []
     if sub is None:
         sub = os.listdir(path)
